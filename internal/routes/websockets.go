@@ -2,30 +2,36 @@ package routes
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"github.com/asifrahaman13/bhagabad_gita/internal/config"
 	"github.com/gorilla/websocket"
 	"net/http"
-	"encoding/json"
-	"github.com/asifrahaman13/bhagabad_gita/internal/config"
 )
 
 type ChatResponse struct {
 	Response string `json:"response"`
 }
 
-func chatBotResponse(prompt string, conn *websocket.Conn) {
-	config  , err:= config.NewConfig()
+type WebsocketMessage struct {
+	Payload  string `json:"payload"`
+	ClientId string `json:"clientId"`
+}
+
+func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
+	config, err := config.NewConfig()
 	if err != nil {
 		fmt.Println("Error getting config:", err)
 		conn.WriteMessage(websocket.TextMessage, []byte("Error getting config"))
 		return
 	}
 	postUrl := config.LLamaUrl
+	fmt.Printf("The message is from the client: %s and the client is: %s", prompt.Payload, prompt.ClientId)
 	body := []byte(fmt.Sprintf(`{
 		"model": "llama3.1",
-		"stream": false,
+		"stream": true,
 		"prompt": "%s"
-	}`, prompt))
+	}`, prompt.Payload))
 
 	req, err := http.NewRequest("POST", postUrl, bytes.NewBuffer(body))
 	if err != nil {
@@ -42,19 +48,22 @@ func chatBotResponse(prompt string, conn *websocket.Conn) {
 		return
 	}
 	defer res.Body.Close()
-	var chatResponse ChatResponse
-	err = json.NewDecoder(res.Body).Decode(&chatResponse)
-	if err != nil {
-		fmt.Println("Error decoding response:", err)
-		conn.WriteMessage(websocket.TextMessage, []byte("Error decoding response"))
-		return
+	for {
+		var chatResponse ChatResponse
+		err = json.NewDecoder(res.Body).Decode(&chatResponse)
+		if err != nil {
+			fmt.Println("Error decoding response:", err)
+			conn.WriteMessage(websocket.TextMessage, []byte(""))
+			return
+		}
+		err = conn.WriteMessage(websocket.TextMessage, []byte(chatResponse.Response))
+		if err != nil {
+			fmt.Println("Error sending message:", err)
+			conn.Close()
+			return
+		}
 	}
-	err = conn.WriteMessage(websocket.TextMessage, []byte(chatResponse.Response))
-	if err != nil {
-		fmt.Println("Error sending message:", err)
-		conn.Close()
-		return
-	}
+
 }
 
 func HandleWebSocketConnection(conn *websocket.Conn) {
@@ -65,6 +74,11 @@ func HandleWebSocketConnection(conn *websocket.Conn) {
 			conn.Close()
 			break
 		}
-		go chatBotResponse(string(message), conn)
+		var messageStruct WebsocketMessage
+		err = json.Unmarshal(message, &messageStruct)
+		if err != nil {
+			fmt.Println("Error decoding message:", err)
+		}
+		go chatBotResponse(messageStruct, conn)
 	}
 }
