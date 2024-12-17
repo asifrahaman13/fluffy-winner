@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+
 	"github.com/asifrahaman13/bhagabad_gita/internal/config"
 	"github.com/gorilla/websocket"
 )
@@ -50,6 +52,8 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 		return
 	}
 	defer res.Body.Close()
+
+	var buffer strings.Builder
 	for {
 		var chatResponse ChatResponse
 		err = json.NewDecoder(res.Body).Decode(&chatResponse)
@@ -58,27 +62,41 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 			conn.WriteMessage(websocket.TextMessage, []byte(""))
 			return
 		}
-		textMessages := WebsocketMessage{
-			ClientId:  prompt.ClientId,
-			MessageId: prompt.MessageId,
-			Payload:   chatResponse.Response,
-			MsgType:   "server",
-		}
-		jsonStringMessage, err := json.Marshal(textMessages)
-		if err != nil {
-			fmt.Println("Error marshaling message:", err)
-			conn.WriteMessage(websocket.TextMessage, []byte("Error marshaling message"))
-			return
-		}
-		err = conn.WriteMessage(websocket.TextMessage, jsonStringMessage)
-		if err != nil {
-			fmt.Println("Error sending message:", err)
-			conn.Close()
-			return
+
+		// Append the incoming response to the buffer
+		buffer.WriteString(chatResponse.Response)
+
+		// Check if the last character in the buffer is a sentence-ending punctuation
+		if strings.HasSuffix(buffer.String(), ".") || strings.HasSuffix(buffer.String(), "!") || strings.HasSuffix(buffer.String(), "?") {
+			// A complete sentence is formed, prepare to send it back
+			textMessages := WebsocketMessage{
+				ClientId:  prompt.ClientId,
+				MessageId: prompt.MessageId,
+				Payload:   buffer.String(),
+				MsgType:   "server",
+			}
+
+			jsonStringMessage, err := json.Marshal(textMessages)
+			if err != nil {
+				fmt.Println("Error marshaling message:", err)
+				conn.WriteMessage(websocket.TextMessage, []byte("Error marshaling message"))
+				return
+			}
+
+			// Send the complete message to the front end
+			err = conn.WriteMessage(websocket.TextMessage, jsonStringMessage)
+			if err != nil {
+				fmt.Println("Error sending message:", err)
+				conn.Close()
+				return
+			}
+
+			// Clear the buffer for the next sentence
+			buffer.Reset()
 		}
 	}
-
 }
+
 
 func HandleWebSocketConnection(conn *websocket.Conn) {
 	for {
