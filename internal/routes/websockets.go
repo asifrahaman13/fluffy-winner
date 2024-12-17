@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"github.com/asifrahaman13/bhagabad_gita/internal/config"
 	"github.com/gorilla/websocket"
-	"net/http"
 )
 
 type ChatResponse struct {
@@ -14,10 +14,10 @@ type ChatResponse struct {
 }
 
 type WebsocketMessage struct {
-    ClientId string `json:"clientId"`
-	MessageId string `json:"messageId"`
-	Payload  string `json:"payload"`
-	MsgType string `json:"msgType"`
+	ClientId  string `json:"clientId"`
+	MessageId int `json:"messageId"`
+	Payload   string `json:"payload"`
+	MsgType   string `json:"msgType"`
 }
 
 func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
@@ -28,7 +28,7 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 		return
 	}
 	postUrl := config.LLamaUrl
-	fmt.Printf("The message is from the client: %s and the client is: %s", prompt.Payload, prompt.ClientId)
+	fmt.Printf("The message is from the client: %s and the client is: %s, message id is: %d, message type is: %s", prompt.Payload, prompt.ClientId, prompt.MessageId, prompt.MsgType)
 	body := []byte(fmt.Sprintf(`{
 		"model": "llama3.1",
 		"stream": true,
@@ -58,7 +58,19 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 			conn.WriteMessage(websocket.TextMessage, []byte(""))
 			return
 		}
-		err = conn.WriteMessage(websocket.TextMessage, []byte(chatResponse.Response))
+		textMessages := WebsocketMessage{
+			ClientId:  prompt.ClientId,
+			MessageId: prompt.MessageId,
+			Payload:   chatResponse.Response,
+			MsgType:   "server",
+		}
+		jsonStringMessage, err := json.Marshal(textMessages)
+		if err != nil {
+			fmt.Println("Error marshaling message:", err)
+			conn.WriteMessage(websocket.TextMessage, []byte("Error marshaling message"))
+			return
+		}
+		err = conn.WriteMessage(websocket.TextMessage, jsonStringMessage)
 		if err != nil {
 			fmt.Println("Error sending message:", err)
 			conn.Close()
