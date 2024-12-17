@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-
 	"github.com/asifrahaman13/bhagabad_gita/internal/config"
 	"github.com/gorilla/websocket"
+	"github.com/asifrahaman13/bhagabad_gita/internal/helper"
 )
 
 type ChatResponse struct {
@@ -17,10 +17,11 @@ type ChatResponse struct {
 
 type WebsocketMessage struct {
 	ClientId  string `json:"clientId"`
-	MessageId int `json:"messageId"`
+	MessageId int    `json:"messageId"`
 	Payload   string `json:"payload"`
 	MsgType   string `json:"msgType"`
 }
+
 
 func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 	config, err := config.NewConfig()
@@ -62,13 +63,8 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 			conn.WriteMessage(websocket.TextMessage, []byte(""))
 			return
 		}
-
-		// Append the incoming response to the buffer
 		buffer.WriteString(chatResponse.Response)
-
-		// Check if the last character in the buffer is a sentence-ending punctuation
-		if strings.HasSuffix(buffer.String(), ".") || strings.HasSuffix(buffer.String(), "!") || strings.HasSuffix(buffer.String(), "?") {
-			// A complete sentence is formed, prepare to send it back
+		if helper.IsSentenceEnd(*bytes.NewBufferString(buffer.String())) {
 			textMessages := WebsocketMessage{
 				ClientId:  prompt.ClientId,
 				MessageId: prompt.MessageId,
@@ -83,20 +79,16 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 				return
 			}
 
-			// Send the complete message to the front end
 			err = conn.WriteMessage(websocket.TextMessage, jsonStringMessage)
 			if err != nil {
 				fmt.Println("Error sending message:", err)
 				conn.Close()
 				return
 			}
-
-			// Clear the buffer for the next sentence
 			buffer.Reset()
 		}
 	}
 }
-
 
 func HandleWebSocketConnection(conn *websocket.Conn) {
 	for {

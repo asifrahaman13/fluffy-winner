@@ -79,7 +79,7 @@ const RealTimeUpdates = () => {
   return (
     <div className="flex flex-col items-center justify-center h-screen bg-gray-100 p-4">
       <h1 className="text-2xl font-semibold mb-4 text-gray-800">
-       Bhagavad Gita
+        Bhagavad Gita
       </h1>
 
       <div className="w-full max-w-md bg-white shadow-lg rounded-lg p-4 mb-4 overflow-y-auto ">
@@ -88,7 +88,9 @@ const RealTimeUpdates = () => {
             <div className={`p-2 rounded-lg `}>
               {msg.msgType === "client" && (
                 <div className="flex flex-row justify-end ">
-                  <div className="bg-gray-100 rounded-xl p-3">{msg.payload}</div>
+                  <div className="bg-gray-100 rounded-xl p-3">
+                    {msg.payload}
+                  </div>
                 </div>
               )}
 
