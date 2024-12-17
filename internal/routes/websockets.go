@@ -14,8 +14,10 @@ type ChatResponse struct {
 }
 
 type WebsocketMessage struct {
+    ClientId string `json:"clientId"`
+	MessageId string `json:"messageId"`
 	Payload  string `json:"payload"`
-	ClientId string `json:"clientId"`
+	MsgType string `json:"msgType"`
 }
 
 func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
