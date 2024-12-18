@@ -22,7 +22,6 @@ type WebsocketMessage struct {
 	MsgType   string `json:"msgType"`
 }
 
-
 func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 	config, err := config.NewConfig()
 	if err != nil {

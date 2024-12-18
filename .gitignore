@@ -16,3 +16,5 @@ node_modules/
 
 __debug_*
 bhagabad_gita
+
+static/
