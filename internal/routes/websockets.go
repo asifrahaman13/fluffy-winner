@@ -200,14 +200,6 @@ func HandleWebSocketConnection(conn *websocket.Conn) {
 		allContext = strings.ReplaceAll(allContext, "\n", " ")
 		messageStruct.Payload = fmt.Sprintf("You are an expert in spiritaul answers. User has the following query. Answer the query: %s . Also you have some additional context to give better ansser: %s", messageStruct.Payload, allContext)
 		go chatBotResponse(messageStruct, conn)
-
-		// result = append(result, map[string]interface{}{
-		// 	"clientId":  messageStruct.ClientId,
-		// 	"messageId": messageStruct.MessageId,
-		// 	"msgType":   "status",
-		// 	"payload":   messageStruct.Payload,
-		// })
-
 		output:=map[string]interface{}{
 			"clientId":  messageStruct.ClientId,
 			"messageId": messageStruct.MessageId,
