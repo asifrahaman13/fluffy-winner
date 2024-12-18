@@ -76,8 +76,9 @@ func (q *QdrantService) VectorSearch(query string, embeddingService *EmbeddingSe
 	}
 	var results []map[string]interface{}
 	for _, res := range searchResult {
+		fmt.Println(res.Payload["pageNum"].GetDoubleValue())
 		results = append(results, map[string]interface{}{
-			"pageNum": res.Id.GetNum(),
+			"pageNum": res.Payload["pageNum"].GetDoubleValue(),
 			"content": res.Payload["pageContent"].GetStringValue(),
 		})
 	}
@@ -199,5 +200,26 @@ func HandleWebSocketConnection(conn *websocket.Conn) {
 		allContext = strings.ReplaceAll(allContext, "\n", " ")
 		messageStruct.Payload = fmt.Sprintf("You are an expert in spiritaul answers. User has the following query. Answer the query: %s . Also you have some additional context to give better ansser: %s", messageStruct.Payload, allContext)
 		go chatBotResponse(messageStruct, conn)
+
+		// result = append(result, map[string]interface{}{
+		// 	"clientId":  messageStruct.ClientId,
+		// 	"messageId": messageStruct.MessageId,
+		// 	"msgType":   "status",
+		// 	"payload":   messageStruct.Payload,
+		// })
+
+		output:=map[string]interface{}{
+			"clientId":  messageStruct.ClientId,
+			"messageId": messageStruct.MessageId,
+			"msgType":   "status",
+			"payload":   result,
+		}
+		jsonResult, err := json.Marshal(output)
+		if err != nil {
+			fmt.Println("Error marshaling result:", err)
+			conn.WriteMessage(websocket.TextMessage, []byte("Error marshaling result"))
+			return
+		}
+		conn.WriteMessage(websocket.TextMessage, jsonResult)
 	}
 }
