@@ -8,7 +8,6 @@ import (
 	"github.com/pdfcrowd/pdfcrowd-go"
 	"github.com/qdrant/go-client/qdrant"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -31,6 +30,27 @@ func handleError(err error) {
 		}
 		panic(err.Error())
 	}
+}
+
+func pdfToJson() {
+	client := pdfcrowd.NewPdfToTextClient("demo", "ce544b6ea52a5621fb9d55f8b542d14d")
+	client.SetPageBreakMode("custom")
+	client.SetCustomPageBreak("\n---PAGE_BREAK---\n")
+	txt, err := client.ConvertFile("static/gita.pdf")
+	handleError(err)
+	pages := strings.Split(string(txt), "\n---PAGE_BREAK---\n")
+	var pageData []map[string]interface{}
+	for i, pageContent := range pages {
+		pageData = append(pageData, map[string]interface{}{
+			"pageNum":     i + 1,
+			"pageContent": strings.TrimSpace(pageContent),
+		})
+	}
+	jsonData, err := json.MarshalIndent(pageData, "", "  ")
+	handleError(err)
+	err = os.WriteFile(OUTPUT_PATH, jsonData, 0644)
+	handleError(err)
+	fmt.Println("Data successfully written to output.json")
 }
 
 func getOllamaEmbedding(content string) ([]float32, error) {
@@ -120,61 +140,59 @@ func embeddings() {
 	fmt.Println("Upsert operation successful:", operationInfo)
 }
 
-func vectorSearch() {
+type VectorSearchResult struct {
+	PageNum uint64 `json:"rank"`
+	Content string `json:"content"`
+}
+
+func vectorSearch(query string) ([]VectorSearchResult, error) {
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: "localhost",
 		Port: 6334,
 	})
 	if err != nil {
 		fmt.Println("Error creating client:", err)
-		return
+		return []VectorSearchResult{}, err
 	}
-	embedding, err := getOllamaEmbedding("brothers-in-law, grandfathers and so on. He was thinking in this way to satisfy\nhis bodily demands. Bhagavad-gītā was spoken by the Lord just to change this\n-DEMO-, and at the end Arjuna decides to fight under the directions of the Lord\nwhen he says, \"kariṣye vacanaṁ tava.\" \"I shall act according to Thy word.\"\n   In this world man is not meant to toil like hogs. He must be intelligent to\nrealize the importance of human life and refuse to act like an ordinary animal.\nA human being should realize the aim of his life, and this direction is given in\nall Vedic literatures, and the essence is given in Bhagavad-gītā. Vedic\nliterature is meant for human beings, not for animals. Animals can kill -DEMO-\nliving animals, and there is no question of sin on their part, but if a man kills\nan animal for the satisfaction of his uncontrolled taste, he must -DEMO- responsible\nfor breaking the laws of nature. In the Bhagavad-gītā it is clearly explained\nthat there are three kinds of activities according to the different modes of\nnature: the activities of goodness,")
+	embedding, err := getOllamaEmbedding(query)
 	if err != nil {
 		fmt.Println("Error getting embedding:", err)
-		return
+		return []VectorSearchResult{}, err
 	}
 	limit := uint64(3)
 	searchResult, err := client.Query(context.Background(), &qdrant.QueryPoints{
 		CollectionName: COLLECTION_NAME,
 		Query:          qdrant.NewQuery(embedding...),
 		Limit:          &limit,
+		WithPayload:    qdrant.NewWithPayload(true),
+		WithVectors:    qdrant.NewWithVectors(false),
 	})
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(searchResult)
-	searchResultJSON, err := json.MarshalIndent(searchResult, "", "  ")
-	if err != nil {
-		log.Println("Error marshalling search results:", err)
-		return
-	}
-	fmt.Println(string(searchResultJSON))
-}
-
-func pdfToJson() {
-	client := pdfcrowd.NewPdfToTextClient("demo", "ce544b6ea52a5621fb9d55f8b542d14d")
-	client.SetPageBreakMode("custom")
-	client.SetCustomPageBreak("\n---PAGE_BREAK---\n")
-	txt, err := client.ConvertFile("static/gita.pdf")
-	handleError(err)
-	pages := strings.Split(string(txt), "\n---PAGE_BREAK---\n")
-	var pageData []map[string]interface{}
-	for i, pageContent := range pages {
-		pageData = append(pageData, map[string]interface{}{
-			"pageNum":     i + 1,
-			"pageContent": strings.TrimSpace(pageContent),
+	result := []VectorSearchResult{}
+	for _, res := range searchResult {
+		pageContent := res.Payload["pageContent"]
+		contentStr := pageContent.GetStringValue()
+		result = append(result, VectorSearchResult{
+			PageNum: res.Id.GetNum(),
+			Content: contentStr,
 		})
 	}
-	jsonData, err := json.MarshalIndent(pageData, "", "  ")
-	handleError(err)
-	err = os.WriteFile(OUTPUT_PATH, jsonData, 0644)
-	handleError(err)
-	fmt.Println("Data successfully written to output.json")
+	return result, nil
 }
 
 func main() {
 	// pdfToJson()
 	// embeddings()
-	vectorSearch()
+
+	query := "brothers-in-law, grandfathers and so on. He was thinking in this way to satisfy\nhis bodily demands. Bhagavad-gītā was spoken by the Lord just to change this\n-DEMO-, and at the end Arjuna decides to fight under the directions of the Lord\nwhen he says, \"kariṣye vacanaṁ tava.\" \"I shall act according to Thy word.\"\n   In this world man is not meant to toil like hogs. He must be intelligent to\nrealize the importance of human life and refuse to act like an ordinary animal.\nA human being should realize the aim of his life, and this direction is given in\nall Vedic literatures, and the essence is given in Bhagavad-gītā. Vedic\nliterature is meant for human beings, not for animals. Animals can kill -DEMO-\nliving animals, and there is no question of sin on their part, but if a man kills\nan animal for the satisfaction of his uncontrolled taste, he must -DEMO- responsible\nfor breaking the laws of nature. In the Bhagavad-gītā it is clearly explained\nthat there are three kinds of activities according to the different modes of\nnature: the activities of goodness,"
+	result, err := vectorSearch(query)
+	if err != nil {
+		fmt.Println("Error searching vectors:", err)
+		return
+	}
+	for _, res := range result {
+		fmt.Printf("Rank: %d\nContent: %s\n\n", res.PageNum, res.Content)
+	}
 }

@@ -82,7 +82,7 @@ const RealTimeUpdates = () => {
         Bhagavad Gita
       </h1>
 
-      <div className="w-full max-w-md bg-white shadow-lg rounded-lg p-4 mb-4 overflow-y-auto ">
+      <div className="w-full max-w-md bg-white shadow-lg rounded-lg p-4 mb-4 overflow-y-auto no-scrollbar ">
         {messages.map((msg, index) => (
           <div key={index} className="flex flex-col mb-2">
             <div className={`p-2 rounded-lg `}>
