@@ -1,4 +1,4 @@
-# bhagabad_gita backend.
+# Bhagavad Gita
 
 
 ![Screenshot from 2024-12-18 19-48-13](https://github.com/user-attachments/assets/e61ee059-5e42-46f5-926c-06f4367a52f7)
