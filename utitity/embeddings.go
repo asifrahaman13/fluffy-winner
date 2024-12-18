@@ -5,39 +5,46 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/pdfcrowd/pdfcrowd-go"
-	"github.com/qdrant/go-client/qdrant"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"github.com/google/uuid"
+	"github.com/pdfcrowd/pdfcrowd-go"
+	"github.com/qdrant/go-client/qdrant"
 )
 
 const (
-	OUTPUT_PATH          = "static/output.json"
-	COLLECTION_NAME      = "test_collection"
-	EMBEDDING_MODEL_NAME = "mxbai-embed-large"
-	EMBEDDING_URL        = "http://localhost:11434/api/embeddings"
+	OutputPath         = "static/output.json"
+	FinalOutputPath    = "static/result.json"
+	CollectionName     = "test_collection"
+	EmbeddingModelName = "mxbai-embed-large"
+	EmbeddingURL       = "http://localhost:11434/api/embeddings"
 )
 
-func handleError(err error) {
+// ErrorHandler handles errors
+func ErrorHandler(err error) {
 	if err != nil {
-		why, ok := err.(pdfcrowd.Error)
-		if ok {
-			os.Stderr.WriteString(fmt.Sprintf("Pdfcrowd Error: %s\n", why))
-		} else {
-			os.Stderr.WriteString(fmt.Sprintf("Generic Error: %s\n", err))
-		}
-		panic(err.Error())
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
-func pdfToJson() {
+// PDFProcessor handles PDF to JSON conversion
+type PDFProcessor struct {
+	client pdfcrowd.PdfToTextClient
+}
+
+func NewPDFProcessor() *PDFProcessor {
 	client := pdfcrowd.NewPdfToTextClient("demo", "ce544b6ea52a5621fb9d55f8b542d14d")
 	client.SetPageBreakMode("custom")
 	client.SetCustomPageBreak("\n---PAGE_BREAK---\n")
-	txt, err := client.ConvertFile("static/gita.pdf")
-	handleError(err)
+	return &PDFProcessor{client: client}
+}
+
+func (p *PDFProcessor) ConvertToJSON(inputPath string) {
+	txt, err := p.client.ConvertFile(inputPath)
+	ErrorHandler(err)
 	pages := strings.Split(string(txt), "\n---PAGE_BREAK---\n")
 	var pageData []map[string]interface{}
 	for i, pageContent := range pages {
@@ -47,62 +54,66 @@ func pdfToJson() {
 		})
 	}
 	jsonData, err := json.MarshalIndent(pageData, "", "  ")
-	handleError(err)
-	err = os.WriteFile(OUTPUT_PATH, jsonData, 0644)
-	handleError(err)
+	ErrorHandler(err)
+	err = os.WriteFile(OutputPath, jsonData, 0644)
+	ErrorHandler(err)
 	fmt.Println("Data successfully written to output.json")
 }
 
-func getOllamaEmbedding(content string) ([]float32, error) {
+// EmbeddingService handles embedding requests
+type EmbeddingService struct {
+	url string
+}
+
+func NewEmbeddingService(url string) *EmbeddingService {
+	return &EmbeddingService{url: url}
+}
+
+func (e *EmbeddingService) GetEmbedding(content string) ([]float32, error) {
 	payload := map[string]string{
-		"model":  EMBEDDING_MODEL_NAME,
+		"model":  EmbeddingModelName,
 		"prompt": fmt.Sprintf("Represent this sentence for searching relevant passages: %s", content),
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling payload: %v", err)
 	}
-	resp, err := http.Post(EMBEDDING_URL, "application/json", bytes.NewBuffer(payloadBytes))
+	resp, err := http.Post(e.url, "application/json", bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		return nil, fmt.Errorf("error making request to Ollama API: %v", err)
+		return nil, fmt.Errorf("error making request to embedding API: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("error response from Ollama API: %s", string(body))
+		return nil, fmt.Errorf("error response from embedding API: %s", string(body))
 	}
 	var result struct {
 		Embedding []float32 `json:"embedding"`
 	}
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding Ollama API response: %v", err)
+		return nil, fmt.Errorf("error decoding embedding API response: %v", err)
 	}
 	return result.Embedding, nil
 }
 
-func embeddings() {
-	jsonFile, err := os.ReadFile(OUTPUT_PATH)
-	if err != nil {
-		fmt.Println("Error reading JSON file:", err)
-		return
-	}
-	var pageData []map[string]interface{}
-	err = json.Unmarshal(jsonFile, &pageData)
-	if err != nil {
-		fmt.Println("Error parsing JSON data:", err)
-		return
-	}
+// QdrantService handles interactions with Qdrant
+type QdrantService struct {
+	client *qdrant.Client
+}
+
+func NewQdrantService(host string, port int) *QdrantService {
 	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: "localhost",
-		Port: 6334,
+		Host: host,
+		Port: port,
 	})
-	if err != nil {
-		fmt.Println("Error creating Qdrant client:", err)
-		return
-	}
-	client.CreateCollection(context.Background(), &qdrant.CreateCollection{
-		CollectionName: COLLECTION_NAME,
+	ErrorHandler(err)
+	return &QdrantService{client: client}
+}
+
+func (q *QdrantService) UpsertEmbeddings(pageData []map[string]interface{}, embeddingService *EmbeddingService) {
+	q.client.CreateCollection(context.Background(), &qdrant.CreateCollection{
+		CollectionName: CollectionName,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
 			Size:     1024,
 			Distance: qdrant.Distance_Cosine,
@@ -112,87 +123,157 @@ func embeddings() {
 	for _, page := range pageData {
 		pageContent := page["pageContent"].(string)
 		pageNum := page["pageNum"].(float64)
-		embedding, err := getOllamaEmbedding(pageContent)
+		embedding, err := embeddingService.GetEmbedding(pageContent)
 		if err != nil {
 			fmt.Printf("Error getting embedding for page %v: %v\n", pageNum, err)
 			continue
 		}
-		fmt.Println("The dimension of the embedding is: ", len(embedding))
 		payload := qdrant.NewValueMap(map[string]any{
 			"pageContent": pageContent,
 			"pageNum":     pageNum,
 		})
+		uuid := uuid.New().String()
 		point := &qdrant.PointStruct{
-			Id:      qdrant.NewIDNum(uint64(pageNum)),
+			Id:      qdrant.NewIDUUID(uuid),
 			Vectors: qdrant.NewVectors(embedding...),
 			Payload: payload,
 		}
 		points = append(points, point)
 	}
-	operationInfo, err := client.Upsert(context.Background(), &qdrant.UpsertPoints{
-		CollectionName: COLLECTION_NAME,
+	operationInfo, err := q.client.Upsert(context.Background(), &qdrant.UpsertPoints{
+		CollectionName: CollectionName,
 		Points:         points,
 	})
-	if err != nil {
-		fmt.Println("Error upserting points:", err)
-		return
-	}
+	ErrorHandler(err)
 	fmt.Println("Upsert operation successful:", operationInfo)
 }
 
-type VectorSearchResult struct {
-	PageNum uint64 `json:"rank"`
-	Content string `json:"content"`
-}
-
-func vectorSearch(query string) ([]VectorSearchResult, error) {
-	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: "localhost",
-		Port: 6334,
-	})
+func (q *QdrantService) VectorSearch(query string, embeddingService *EmbeddingService) ([]map[string]interface{}, error) {
+	embedding, err := embeddingService.GetEmbedding(query)
 	if err != nil {
-		fmt.Println("Error creating client:", err)
-		return []VectorSearchResult{}, err
-	}
-	embedding, err := getOllamaEmbedding(query)
-	if err != nil {
-		fmt.Println("Error getting embedding:", err)
-		return []VectorSearchResult{}, err
+		return nil, err
 	}
 	limit := uint64(3)
-	searchResult, err := client.Query(context.Background(), &qdrant.QueryPoints{
-		CollectionName: COLLECTION_NAME,
+	searchResult, err := q.client.Query(context.Background(), &qdrant.QueryPoints{
+		CollectionName: CollectionName,
 		Query:          qdrant.NewQuery(embedding...),
 		Limit:          &limit,
 		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false),
 	})
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	result := []VectorSearchResult{}
+	var results []map[string]interface{}
 	for _, res := range searchResult {
-		pageContent := res.Payload["pageContent"]
-		contentStr := pageContent.GetStringValue()
-		result = append(result, VectorSearchResult{
-			PageNum: res.Id.GetNum(),
-			Content: contentStr,
+		results = append(results, map[string]interface{}{
+			"pageNum": res.Id.GetNum(),
+			"content": res.Payload["pageContent"].GetStringValue(),
 		})
 	}
-	return result, nil
+	return results, nil
+}
+
+type Page struct {
+	PageContent string `json:"pageContent"`
+	PageNum     int    `json:"pageNum"`
+	PageIdx     int    `json:"pageIdx"`
+}
+
+func splitIntoChunks(content string, maxWords int) []string {
+	words := strings.Fields(content)
+	var chunks []string
+
+	for i := 0; i < len(words); i += maxWords {
+		end := i + maxWords
+		if end > len(words) {
+			end = len(words)
+		}
+		chunk := strings.Join(words[i:end], " ")
+		chunks = append(chunks, chunk)
+	}
+
+	return chunks
+}
+
+func split() {
+	// Input and output file paths
+	inputFile := "static/output.json"
+	outputFile := "static/result.json"
+
+	// Read the input file
+	data, err := os.ReadFile(inputFile)
+	if err != nil {
+		fmt.Printf("Error reading input file: %v\n", err)
+		return
+	}
+
+	// Parse the input JSON
+	var pages []Page
+	err = json.Unmarshal(data, &pages)
+	if err != nil {
+		fmt.Printf("Error parsing JSON: %v\n", err)
+		return
+	}
+
+	var processedPages []Page
+
+	// Process each page
+	for _, page := range pages {
+		if len(strings.Fields(page.PageContent)) > 100 {
+			chunks := splitIntoChunks(page.PageContent, 100)
+			for idx, chunk := range chunks {
+				processedPages = append(processedPages, Page{
+					PageContent: chunk,
+					PageNum:     page.PageNum,
+					PageIdx:     idx,
+				})
+				// Optional: Adjust page numbers if required
+			}
+		} else {
+			processedPages = append(processedPages, page)
+		}
+	}
+
+	// Write the output file
+	outputData, err := json.MarshalIndent(processedPages, "", "  ")
+	if err != nil {
+		fmt.Printf("Error marshalling JSON: %v\n", err)
+		return
+	}
+
+	err = os.WriteFile(outputFile, outputData, 0644)
+	if err != nil {
+		fmt.Printf("Error writing output file: %v\n", err)
+		return
+	}
+
+	fmt.Println("Processing complete. Output written to", outputFile)
 }
 
 func main() {
-	// pdfToJson()
-	// embeddings()
+	// split()
+	// pdfProcessor := NewPDFProcessor()
+	embeddingService := NewEmbeddingService(EmbeddingURL)
+	qdrantService := NewQdrantService("localhost", 6334)
 
-	query := "brothers-in-law, grandfathers and so on. He was thinking in this way to satisfy\nhis bodily demands. Bhagavad-gītā was spoken by the Lord just to change this\n-DEMO-, and at the end Arjuna decides to fight under the directions of the Lord\nwhen he says, \"kariṣye vacanaṁ tava.\" \"I shall act according to Thy word.\"\n   In this world man is not meant to toil like hogs. He must be intelligent to\nrealize the importance of human life and refuse to act like an ordinary animal.\nA human being should realize the aim of his life, and this direction is given in\nall Vedic literatures, and the essence is given in Bhagavad-gītā. Vedic\nliterature is meant for human beings, not for animals. Animals can kill -DEMO-\nliving animals, and there is no question of sin on their part, but if a man kills\nan animal for the satisfaction of his uncontrolled taste, he must -DEMO- responsible\nfor breaking the laws of nature. In the Bhagavad-gītā it is clearly explained\nthat there are three kinds of activities according to the different modes of\nnature: the activities of goodness,"
-	result, err := vectorSearch(query)
-	if err != nil {
-		fmt.Println("Error searching vectors:", err)
-		return
+	// // Step 1: Convert PDF to JSON
+	// pdfProcessor.ConvertToJSON("static/gita.pdf")
+	// // split()
+
+	// // Step 2: Load JSON and Upsert Embeddings
+	// jsonFile, err := os.ReadFile(FinalOutputPath)
+	// ErrorHandler(err)
+	// var pageData []map[string]interface{}
+	// err = json.Unmarshal(jsonFile, &pageData)
+	// ErrorHandler(err)
+	// qdrantService.UpsertEmbeddings(pageData, embeddingService)
+
+	// Step 3: Perform Vector Search
+	query := "how a man should treat a wife"
+	results, err := qdrantService.VectorSearch(query, embeddingService)
+	ErrorHandler(err)
+	for _, res := range results {
+		fmt.Printf("PageNum: %v\nContent: %v\n\n", res["pageNum"], res["content"])
 	}
-	for _, res := range result {
-		fmt.Printf("Rank: %d\nContent: %s\n\n", res.PageNum, res.Content)
-	}
+
 }

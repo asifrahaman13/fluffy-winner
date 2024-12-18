@@ -6,28 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/asifrahaman13/bhagabad_gita/internal/config"
+	"github.com/asifrahaman13/bhagabad_gita/internal/core/domain"
 	"github.com/asifrahaman13/bhagabad_gita/internal/helper"
 	"github.com/gorilla/websocket"
 	"github.com/qdrant/go-client/qdrant"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 )
-
-type ChatResponse struct {
-	Response string `json:"response"`
-}
-
-type WebsocketMessage struct {
-	ClientId  string `json:"clientId"`
-	MessageId int    `json:"messageId"`
-	Payload   string `json:"payload"`
-	MsgType   string `json:"msgType"`
-}
-type VectorSearchResult struct {
-	PageNum uint64 `json:"rank"`
-	Content string `json:"content"`
-}
 
 const (
 	OUTPUT_PATH          = "static/output.json"
@@ -36,7 +23,15 @@ const (
 	EMBEDDING_URL        = "http://localhost:11434/api/embeddings"
 )
 
-func getOllamaEmbedding(content string) ([]float32, error) {
+type EmbeddingService struct {
+	url string
+}
+
+type QdrantService struct {
+	client *qdrant.Client
+}
+
+func (e *EmbeddingService) GetEmbedding(content string) ([]float32, error) {
 	payload := map[string]string{
 		"model":  EMBEDDING_MODEL_NAME,
 		"prompt": fmt.Sprintf("Represent this sentence for searching relevant passages: %s", content),
@@ -45,77 +40,51 @@ func getOllamaEmbedding(content string) ([]float32, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling payload: %v", err)
 	}
-	resp, err := http.Post(EMBEDDING_URL, "application/json", bytes.NewBuffer(payloadBytes))
+	resp, err := http.Post(e.url, "application/json", bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		return nil, fmt.Errorf("error making request to Ollama API: %v", err)
+		return nil, fmt.Errorf("error making request to embedding API: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("error response from Ollama API: %s", string(body))
+		return nil, fmt.Errorf("error response from embedding API: %s", string(body))
 	}
 	var result struct {
 		Embedding []float32 `json:"embedding"`
 	}
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding Ollama API response: %v", err)
+		return nil, fmt.Errorf("error decoding embedding API response: %v", err)
 	}
 	return result.Embedding, nil
 }
 
-func vectorSearch(query string) ([]VectorSearchResult, error) {
-	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: "localhost",
-		Port: 6334,
-	})
+func (q *QdrantService) VectorSearch(query string, embeddingService *EmbeddingService) ([]map[string]interface{}, error) {
+	embedding, err := embeddingService.GetEmbedding(query)
 	if err != nil {
-		fmt.Println("Error creating client:", err)
-		return []VectorSearchResult{}, err
-	}
-	embedding, err := getOllamaEmbedding(query)
-	if err != nil {
-		fmt.Println("Error getting embedding:", err)
-		return []VectorSearchResult{}, err
+		return nil, err
 	}
 	limit := uint64(3)
-	searchResult, err := client.Query(context.Background(), &qdrant.QueryPoints{
+	searchResult, err := q.client.Query(context.Background(), &qdrant.QueryPoints{
 		CollectionName: COLLECTION_NAME,
 		Query:          qdrant.NewQuery(embedding...),
 		Limit:          &limit,
 		WithPayload:    qdrant.NewWithPayload(true),
-		WithVectors:    qdrant.NewWithVectors(false),
 	})
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	result := []VectorSearchResult{}
+	var results []map[string]interface{}
 	for _, res := range searchResult {
-		pageContent := res.Payload["pageContent"]
-		contentStr := pageContent.GetStringValue()
-		result = append(result, VectorSearchResult{
-			PageNum: res.Id.GetNum(),
-			Content: contentStr,
+		results = append(results, map[string]interface{}{
+			"pageNum": res.Id.GetNum(),
+			"content": res.Payload["pageContent"].GetStringValue(),
 		})
 	}
-	return result, nil
+	return results, nil
 }
 
-func main() {
-
-	query := "brothers-in-law, grandfathers and so on. He was thinking in this way to satisfy\nhis bodily demands. Bhagavad-gītā was spoken by the Lord just to change this\n-DEMO-, and at the end Arjuna decides to fight under the directions of the Lord\nwhen he says, \"kariṣye vacanaṁ tava.\" \"I shall act according to Thy word.\"\n   In this world man is not meant to toil like hogs. He must be intelligent to\nrealize the importance of human life and refuse to act like an ordinary animal.\nA human being should realize the aim of his life, and this direction is given in\nall Vedic literatures, and the essence is given in Bhagavad-gītā. Vedic\nliterature is meant for human beings, not for animals. Animals can kill -DEMO-\nliving animals, and there is no question of sin on their part, but if a man kills\nan animal for the satisfaction of his uncontrolled taste, he must -DEMO- responsible\nfor breaking the laws of nature. In the Bhagavad-gītā it is clearly explained\nthat there are three kinds of activities according to the different modes of\nnature: the activities of goodness,"
-	result, err := vectorSearch(query)
-	if err != nil {
-		fmt.Println("Error searching vectors:", err)
-		return
-	}
-	for _, res := range result {
-		fmt.Printf("Rank: %d\nContent: %s\n\n", res.PageNum, res.Content)
-	}
-
-}
-
-func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
+func chatBotResponse(prompt domain.WebsocketMessage, conn *websocket.Conn) {
 	config, err := config.NewConfig()
 	if err != nil {
 		fmt.Println("Error getting config:", err)
@@ -148,7 +117,7 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 
 	var buffer strings.Builder
 	for {
-		var chatResponse ChatResponse
+		var chatResponse domain.ChatResponse
 		err = json.NewDecoder(res.Body).Decode(&chatResponse)
 		if err != nil {
 			fmt.Println("Error decoding response:", err)
@@ -157,7 +126,7 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 		}
 		buffer.WriteString(chatResponse.Response)
 		if helper.IsSentenceEnd(*bytes.NewBufferString(buffer.String())) {
-			textMessages := WebsocketMessage{
+			textMessages := domain.WebsocketMessage{
 				ClientId:  prompt.ClientId,
 				MessageId: prompt.MessageId,
 				Payload:   buffer.String(),
@@ -182,6 +151,25 @@ func chatBotResponse(prompt WebsocketMessage, conn *websocket.Conn) {
 	}
 }
 
+func NewEmbeddingService(url string) *EmbeddingService {
+	return &EmbeddingService{url: url}
+}
+func ErrorHandler(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func NewQdrantService(host string, port int) *QdrantService {
+	client, err := qdrant.NewClient(&qdrant.Config{
+		Host: host,
+		Port: port,
+	})
+	ErrorHandler(err)
+	return &QdrantService{client: client}
+}
+
 func HandleWebSocketConnection(conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
@@ -190,19 +178,21 @@ func HandleWebSocketConnection(conn *websocket.Conn) {
 			conn.Close()
 			break
 		}
-		var messageStruct WebsocketMessage
+		var messageStruct domain.WebsocketMessage
 		err = json.Unmarshal(message, &messageStruct)
 		if err != nil {
 			fmt.Println("Error decoding message:", err)
 		}
-		result, err := vectorSearch(messageStruct.Payload)
+		embeddingService := NewEmbeddingService(EMBEDDING_URL)
+		qdrantService := NewQdrantService("localhost", 6334)
+		result, err := qdrantService.VectorSearch(messageStruct.Payload, embeddingService)
 		if err != nil {
 			fmt.Println("Error searching vectors:", err)
 			return
 		}
 		allContext := ""
 		for _, res := range result {
-			trimmedContent := strings.TrimSpace(res.Content)
+			trimmedContent := strings.TrimSpace(res["content"].(string))
 			allContext += trimmedContent + "\n"
 		}
 		fmt.Println(allContext)

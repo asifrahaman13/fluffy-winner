@@ -15,8 +15,8 @@ const RealTimeUpdates = () => {
   const messageIdRef = useRef<number>(0);
   const wsRef = useRef<WebSocket | null>(null);
 
-  const websocket = new WebSocket("ws://127.0.0.1:8000/ws");
   useEffect(() => {
+    const websocket = new WebSocket("ws://127.0.0.1:8000/ws");
     wsRef.current = websocket;
 
     websocket.onopen = () => {
