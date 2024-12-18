@@ -1,6 +1,10 @@
 # bhagabad_gita backend.
 
-First clone the repository.
+
+![Screenshot from 2024-12-18 19-48-13](https://github.com/user-attachments/assets/e61ee059-5e42-46f5-926c-06f4367a52f7)
+
+
+First, clone the repository.
 
 ```bash
 git clone https://github.com/asifrahaman13/bhagavad_gita.git
@@ -10,7 +14,7 @@ git clone https://github.com/asifrahaman13/bhagavad_gita.git
 
 Rename the .env.example file to .env file.
 
-In Unix based system you can use the following:
+In Unix based system, you can use the following:
 
 ```bash
 mv .env.example .env
